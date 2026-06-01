@@ -15,6 +15,40 @@ from tradingagents.agents.utils.google_tool_handler import GoogleToolCallHandler
 from tradingagents.agents.utils.instrument_utils import build_instrument_context
 
 
+def _get_china_company_name_from_tushare_cache(ticker: str) -> str:
+    """
+    Read the A-share code/name mapping synced from Tushare stock_basic.
+
+    Tushare's stock_basic endpoint returns the full A-share code/name table, and
+    the app sync stores it in stock_basic_info. Prefer that local mapping so
+    report titles do not depend on per-analysis live lookups.
+    """
+    try:
+        from tradingagents.dataflows.cache.app_adapter import get_basics_from_cache
+
+        clean_code = (
+            str(ticker)
+            .upper()
+            .replace(".SH", "")
+            .replace(".SZ", "")
+            .replace(".SS", "")
+            .replace(".XSHE", "")
+            .replace(".XSHG", "")
+        )
+        clean_code = clean_code.zfill(6) if clean_code.isdigit() else clean_code
+
+        doc = get_basics_from_cache(clean_code)
+        if doc:
+            company_name = (doc.get("name") or doc.get("stock_name") or "").strip()
+            if company_name:
+                logger.info(f"✅ [市场分析师] 从Tushare股票基础信息缓存获取公司名称: {ticker} -> {company_name}")
+                return company_name
+    except Exception as e:
+        logger.debug(f"📊 [市场分析师] Tushare股票名称缓存未命中或读取失败: {ticker}, {e}")
+
+    return ""
+
+
 def _get_company_name(ticker: str, market_info: dict) -> str:
     """
     根据股票代码获取公司名称
@@ -28,6 +62,10 @@ def _get_company_name(ticker: str, market_info: dict) -> str:
     """
     try:
         if market_info['is_china']:
+            cached_name = _get_china_company_name_from_tushare_cache(ticker)
+            if cached_name:
+                return cached_name
+
             # 中国A股：使用统一接口获取股票信息
             from tradingagents.dataflows.interface import get_china_stock_info_unified
             stock_info = get_china_stock_info_unified(ticker)
@@ -91,6 +129,29 @@ def _get_company_name(ticker: str, market_info: dict) -> str:
     except Exception as e:
         logger.error(f"❌ [DEBUG] 获取公司名称失败: {e}")
         return f"股票{ticker}"
+
+
+def _ensure_company_name_in_report(report: str, ticker: str, company_name: str, market_info: dict) -> str:
+    """Ensure the market report starts with explicit stock identity information."""
+    report = report or ""
+    company_name = company_name or f"股票{ticker}"
+
+    if company_name in report and ticker in report:
+        return report
+
+    identity_header = f"""# **{company_name}（{ticker}）技术分析报告**
+
+## 股票基本信息
+
+- **公司名称**：{company_name}
+- **股票代码**：{ticker}
+- **所属市场**：{market_info.get('market_name', '未知')}
+
+---
+
+"""
+
+    return identity_header + report.lstrip()
 
 
 def create_market_analyst(llm, toolkit):
@@ -279,6 +340,7 @@ def create_market_analyst(llm, toolkit):
                 analysis_prompt_template=analysis_prompt_template,
                 analyst_name="市场分析师"
             )
+            report = _ensure_company_name_in_report(report, ticker, company_name, market_info)
 
             # 🔧 更新工具调用计数器
             return {
@@ -301,6 +363,7 @@ def create_market_analyst(llm, toolkit):
             if len(result.tool_calls) == 0:
                 # 没有工具调用，直接使用LLM的回复
                 report = result.content
+                report = _ensure_company_name_in_report(report, ticker, company_name, market_info)
                 logger.info(f"📊 [市场分析师] ✅ 直接回复（无工具调用），长度: {len(report)}")
                 logger.debug(f"📊 [DEBUG] 直接回复内容预览: {report[:200]}...")
             else:
@@ -476,6 +539,7 @@ def create_market_analyst(llm, toolkit):
                     # 生成最终分析报告
                     final_result = llm.invoke(messages)
                     report = final_result.content
+                    report = _ensure_company_name_in_report(report, ticker, company_name, market_info)
 
                     logger.info(f"📊 [市场分析师] 生成完整分析报告，长度: {len(report)}")
 
@@ -493,6 +557,7 @@ def create_market_analyst(llm, toolkit):
 
                     # 降级处理：返回工具调用信息
                     report = f"市场分析师调用了工具但分析生成失败: {[call.get('name', 'unknown') for call in result.tool_calls]}"
+                    report = _ensure_company_name_in_report(report, ticker, company_name, market_info)
 
                     # 🔧 更新工具调用计数器
                     return {

@@ -367,7 +367,7 @@ import { ApiClient } from '@/api/request'
 import { stockSyncApi } from '@/api/stockSync'
 import { clearAllCache } from '@/api/cache'
 import { use as echartsUse } from 'echarts/core'
-import { CandlestickChart } from 'echarts/charts'
+import { BarChart, CandlestickChart } from 'echarts/charts'
 
 import { GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, TitleComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -376,7 +376,7 @@ import type { EChartsOption } from 'echarts'
 import { favoritesApi } from '@/api/favorites'
 
 
-echartsUse([CandlestickChart, GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, TitleComponent, CanvasRenderer])
+echartsUse([BarChart, CandlestickChart, GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
 const route = useRoute()
 const router = useRouter()
@@ -411,24 +411,52 @@ const isFav = ref(false)
 
 // ECharts K线配置
 const kOption = ref<EChartsOption>({
-  grid: { left: 40, right: 20, top: 20, bottom: 40 },
+  grid: [
+    { left: 48, right: 24, top: 20, height: '62%' },
+    { left: 48, right: 24, top: '76%', height: '14%' }
+  ],
   tooltip: {
     trigger: 'axis',
-    axisPointer: { type: 'cross' }
+    axisPointer: {
+      type: 'cross',
+      link: [{ xAxisIndex: 'all' }]
+    }
   },
-  xAxis: {
-    type: 'category',
-    data: [],
-    boundaryGap: true,
-    axisLine: { onZero: false }
-  },
-  yAxis: {
-    scale: true,
-    type: 'value'
-  },
+  xAxis: [
+    {
+      type: 'category',
+      data: [],
+      boundaryGap: true,
+      axisLine: { onZero: false }
+    },
+    {
+      type: 'category',
+      gridIndex: 1,
+      data: [],
+      boundaryGap: true,
+      axisLine: { onZero: false },
+      axisTick: { show: false },
+      axisLabel: { show: false }
+    }
+  ],
+  yAxis: [
+    {
+      scale: true,
+      type: 'value'
+    },
+    {
+      type: 'value',
+      gridIndex: 1,
+      scale: true,
+      splitNumber: 2,
+      axisLabel: {
+        formatter: (value: number) => fmtVolume(value)
+      }
+    }
+  ],
   dataZoom: [
-    { type: 'inside', start: 70, end: 100 },
-    { start: 70, end: 100 }
+    { type: 'inside', xAxisIndex: [0, 1], start: 70, end: 100 },
+    { xAxisIndex: [0, 1], start: 70, end: 100 }
   ],
   series: [
     {
@@ -440,6 +468,16 @@ const kOption = ref<EChartsOption>({
         color0: '#16a34a',
         borderColor: '#ef4444',
         borderColor0: '#16a34a'
+      }
+    },
+    {
+      type: 'bar',
+      name: '成交量',
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      data: [],
+      itemStyle: {
+        color: '#94a3b8'
       }
     }
   ]
@@ -812,6 +850,8 @@ async function fetchKline() {
 
     const category: string[] = []
     const values: number[][] = [] // [open, close, low, high]
+    const volumes: number[] = []
+    const volumeColors: string[] = []
 
     for (const it of items) {
       const t = String(it.time || it.trade_time || it.trade_date || '')
@@ -819,9 +859,12 @@ async function fetchKline() {
       const h = Number(it.high ?? NaN)
       const l = Number(it.low ?? NaN)
       const c = Number(it.close ?? NaN)
+      const v = Number(it.volume ?? it.vol ?? 0)
       if (!Number.isFinite(o) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(c) || !t) continue
       category.push(t)
       values.push([o, c, l, h])
+      volumes.push(Number.isFinite(v) ? v : 0)
+      volumeColors.push(c >= o ? '#ef4444' : '#16a34a')
     }
 
     if (category.length) {
@@ -831,7 +874,18 @@ async function fetchKline() {
 
     kOption.value = {
       ...kOption.value,
-      xAxis: { type: 'category', data: category, boundaryGap: true, axisLine: { onZero: false } },
+      xAxis: [
+        { type: 'category', data: category, boundaryGap: true, axisLine: { onZero: false } },
+        {
+          type: 'category',
+          gridIndex: 1,
+          data: category,
+          boundaryGap: true,
+          axisLine: { onZero: false },
+          axisTick: { show: false },
+          axisLabel: { show: false }
+        }
+      ],
       series: [
         {
           type: 'candlestick',
@@ -842,6 +896,17 @@ async function fetchKline() {
             color0: '#16a34a',
             borderColor: '#ef4444',
             borderColor0: '#16a34a'
+          }
+        },
+        {
+          type: 'bar',
+          name: '成交量',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          data: volumes,
+          barWidth: '60%',
+          itemStyle: {
+            color: (params: any) => volumeColors[params.dataIndex] || '#94a3b8'
           }
         }
       ]
@@ -1248,7 +1313,7 @@ function exportReport() {
 
 .body { margin-top: 4px; }
 .card-hd { display: flex; align-items: center; justify-content: space-between; }
-.k-chart { height: 320px; }
+.k-chart { height: 420px; }
 .legend { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 
 .news-card .news-list { display: flex; flex-direction: column; }
