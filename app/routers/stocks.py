@@ -708,14 +708,19 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
                 if isinstance(publish_time, datetime):
                     publish_time = publish_time.isoformat()
 
+                try:
+                    from tradingagents.dataflows.xueqiu_mcp import repair_mojibake_text
+                except Exception:
+                    repair_mojibake_text = lambda value: value or ""
+
                 items.append({
-                    "title": news.get("title", ""),
-                    "source": news.get("source", ""),
+                    "title": repair_mojibake_text(news.get("title", "")),
+                    "source": repair_mojibake_text(news.get("source", "")),
                     "time": publish_time,
                     "url": news.get("url", ""),
                     "type": "news",
-                    "content": news.get("content", ""),
-                    "summary": news.get("summary", "")
+                    "content": repair_mojibake_text(news.get("content", "")),
+                    "summary": repair_mojibake_text(news.get("summary", ""))
                 })
 
             logger.info(f"✅ 转换完成: {len(items)} 条新闻")
@@ -745,6 +750,36 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
                         logger.warning(f"⚠️ 数据源适配器兜底也未返回新闻: {normalized_code}")
                 except Exception as e:
                     logger.error(f"❌ 数据源适配器兜底失败: {e}", exc_info=True)
+
+            # 4. 最后使用本地 Chrome MCP 从雪球获取资讯和用户讨论，保证详情页可主动补数。
+            if not items:
+                logger.info(f"⚠️ 传统数据源均无新闻，尝试雪球MCP兜底: {normalized_code}")
+                try:
+                    import asyncio
+                    from tradingagents.dataflows.xueqiu_mcp import fetch_xueqiu_stock_items
+
+                    xueqiu_items = await asyncio.to_thread(
+                        fetch_xueqiu_stock_items,
+                        normalized_code,
+                        limit
+                    )
+                    items = [
+                        {
+                            "title": item.title,
+                            "source": item.source,
+                            "time": item.publish_time.isoformat(),
+                            "url": item.url,
+                            "type": "news" if item.raw_type == "3" else "social",
+                            "content": item.content,
+                            "summary": item.summary,
+                        }
+                        for item in xueqiu_items[:limit]
+                    ]
+                    if items:
+                        data_source = "xueqiu_mcp"
+                        logger.info(f"✅ 雪球MCP兜底成功: items={len(items)}")
+                except Exception as e:
+                    logger.error(f"❌ 雪球MCP兜底失败: {e}", exc_info=True)
 
             data = {
                 "code": normalized_code,

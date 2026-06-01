@@ -154,8 +154,46 @@ def create_social_media_analyst(llm, toolkit):
 - 基于情绪的交易时机建议
 
 请撰写详细的中文分析报告，并在报告末尾附上Markdown表格总结关键发现。
-注意：由于中国社交媒体API限制，如果数据获取受限，请明确说明并提供替代分析建议。"""
+注意：A股和港股优先使用本地MCP连接雪球获取真实用户讨论和资讯，请基于真实样本分析。"""
         )
+
+        # A股/港股：先通过本地 MCP 获取雪球讨论，再交给社媒分析师生成报告。
+        # 这样即使模型没有主动调用工具，也能确保报告基于真实社媒样本。
+        if market_info.get('is_china') or market_info.get('is_hk'):
+            try:
+                from langchain_core.messages import AIMessage
+                from tradingagents.dataflows.xueqiu_mcp import (
+                    fetch_xueqiu_stock_items,
+                    format_items_for_sentiment,
+                )
+
+                logger.info(f"[社交媒体分析师] 🧭 预先通过MCP获取雪球用户情绪: {ticker}")
+                xueqiu_items = fetch_xueqiu_stock_items(ticker, limit=20)
+                sentiment_data = format_items_for_sentiment(xueqiu_items, ticker)
+
+                if sentiment_data and len(sentiment_data.strip()) > 100:
+                    prompt_text = f"""请基于以下通过本地 MCP 从雪球获取的真实用户讨论和资讯样本，对 {ticker}（{company_name}）进行社交媒体情绪分析。
+
+=== 雪球用户情绪样本 ===
+{sentiment_data}
+
+=== 分析要求 ===
+{system_message}
+
+请输出完整中文报告，必须包含情绪指数评分（1-10分）、讨论热度、主要分歧、短期价格影响和交易时机建议。"""
+                    result = llm.invoke([
+                        {"role": "system", "content": "您是一位专业的社交媒体和投资者情绪分析师。"},
+                        {"role": "user", "content": prompt_text},
+                    ])
+                    report = result.content if hasattr(result, "content") else str(result)
+                    if report and len(report.strip()) > 50:
+                        return {
+                            "messages": [AIMessage(content=report)],
+                            "sentiment_report": report,
+                            "sentiment_tool_call_count": tool_call_count + 1
+                        }
+            except Exception as e:
+                logger.warning(f"[社交媒体分析师] MCP雪球情绪预获取失败，回退到工具调用流程: {e}")
 
         prompt = ChatPromptTemplate.from_messages(
             [

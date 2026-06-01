@@ -2555,9 +2555,15 @@ class SimpleAnalysisService:
                 logger.warning(f"⚠️ 获取股票名称失败: {stock_symbol} - {e}")
                 stock_name = stock_symbol
 
+            if stock_name and stock_name != stock_symbol:
+                report_title = f"{stock_name}({stock_symbol}) 分析报告"
+            else:
+                report_title = f"{stock_symbol} 分析报告"
+
             # 构建文档（与web目录的MongoDBReportManager保持一致）
             document = {
                 "analysis_id": analysis_id,
+                "title": report_title,
                 "stock_symbol": stock_symbol,
                 "stock_name": stock_name,  # 🔥 添加股票名称字段
                 "market_type": market_type,  # 🔥 添加市场类型字段
@@ -2606,7 +2612,9 @@ class SimpleAnalysisService:
                     {"task_id": task_id},
                     {"$set": {"result": {
                         "analysis_id": analysis_id,
+                        "title": report_title,
                         "stock_symbol": stock_symbol,
+                        "stock_name": stock_name,
                         "stock_code": result.get('stock_code', stock_symbol),
                         "analysis_date": result.get('analysis_date'),
                         "summary": result.get("summary", ""),
@@ -2742,52 +2750,54 @@ class SimpleAnalysisService:
 
             state = result.get('state', {})
             saved_files = {}
+            stock_name = str(result.get('stock_name') or '').strip()
+            report_subject = f"{stock_name}({stock_symbol})" if stock_name and stock_name != stock_symbol else stock_symbol
 
             # 定义报告模块映射 - 完全按照web目录的定义
             report_modules = {
                 'market_report': {
                     'filename': 'market_report.md',
-                    'title': f'{stock_symbol} 股票技术分析报告',
+                    'title': f'{report_subject} 股票技术分析报告',
                     'state_key': 'market_report'
                 },
                 'sentiment_report': {
                     'filename': 'sentiment_report.md',
-                    'title': f'{stock_symbol} 市场情绪分析报告',
+                    'title': f'{report_subject} 市场情绪分析报告',
                     'state_key': 'sentiment_report'
                 },
                 'news_report': {
                     'filename': 'news_report.md',
-                    'title': f'{stock_symbol} 新闻事件分析报告',
+                    'title': f'{report_subject} 新闻事件分析报告',
                     'state_key': 'news_report'
                 },
                 'fundamentals_report': {
                     'filename': 'fundamentals_report.md',
-                    'title': f'{stock_symbol} 基本面分析报告',
+                    'title': f'{report_subject} 基本面分析报告',
                     'state_key': 'fundamentals_report'
                 },
                 'investment_plan': {
                     'filename': 'investment_plan.md',
-                    'title': f'{stock_symbol} 投资决策报告',
+                    'title': f'{report_subject} 投资决策报告',
                     'state_key': 'investment_plan'
                 },
                 'trader_investment_plan': {
                     'filename': 'trader_investment_plan.md',
-                    'title': f'{stock_symbol} 交易计划报告',
+                    'title': f'{report_subject} 交易计划报告',
                     'state_key': 'trader_investment_plan'
                 },
                 'final_trade_decision': {
                     'filename': 'final_trade_decision.md',
-                    'title': f'{stock_symbol} 最终投资决策',
+                    'title': f'{report_subject} 最终投资决策',
                     'state_key': 'final_trade_decision'
                 },
                 'investment_debate_state': {
                     'filename': 'research_team_decision.md',
-                    'title': f'{stock_symbol} 研究团队决策报告',
+                    'title': f'{report_subject} 研究团队决策报告',
                     'state_key': 'investment_debate_state'
                 },
                 'risk_debate_state': {
                     'filename': 'risk_management_decision.md',
-                    'title': f'{stock_symbol} 风险管理团队决策报告',
+                    'title': f'{report_subject} 风险管理团队决策报告',
                     'state_key': 'risk_debate_state'
                 }
             }
@@ -2818,7 +2828,7 @@ class SimpleAnalysisService:
             # 保存最终决策报告 - 完全按照web目录的方式
             decision = result.get('decision', {})
             if decision:
-                decision_content = f"# {stock_symbol} 最终投资决策\n\n"
+                decision_content = f"# {report_subject} 最终投资决策\n\n"
 
                 if isinstance(decision, dict):
                     decision_content += f"## 投资建议\n\n"
@@ -2840,6 +2850,8 @@ class SimpleAnalysisService:
             # 保存分析元数据文件 - 完全按照web目录的方式
             metadata = {
                 'stock_symbol': stock_symbol,
+                'stock_name': stock_name,
+                'title': f'{report_subject} 分析报告',
                 'analysis_date': analysis_date_str,
                 'timestamp': datetime.now().isoformat(),
                 'research_depth': result.get('research_depth', 1),

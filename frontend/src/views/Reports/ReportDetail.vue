@@ -13,7 +13,7 @@
           <div class="title-section">
             <h1 class="report-title">
               <el-icon><Document /></el-icon>
-              {{ report.stock_name || report.stock_symbol }} 分析报告
+              {{ report.title || `${report.stock_name || report.stock_symbol} 分析报告` }}
             </h1>
             <div class="report-meta">
               <el-tag type="primary">{{ report.stock_symbol }}</el-tag>
@@ -304,6 +304,7 @@ type ReportModuleContent = string | Record<string, unknown>
 type ReportDetailData = {
   id: string
   analysis_id?: string
+  title?: string
   stock_symbol: string
   stock_name?: string
   status: string

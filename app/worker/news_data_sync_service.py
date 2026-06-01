@@ -111,10 +111,23 @@ class NewsDataSyncService:
             self.logger.info(f"📰 开始同步股票新闻: {symbol}")
             
             if data_sources is None:
-                data_sources = ["tushare", "akshare", "realtime"]
+                data_sources = ["xueqiu_mcp", "tushare", "akshare", "realtime"]
             
             news_service = await self._get_news_service()
             all_news = []
+
+            # 0. 雪球 MCP 资讯/讨论
+            if "xueqiu_mcp" in data_sources:
+                try:
+                    xueqiu_news = await self._sync_xueqiu_mcp_news(
+                        symbol, hours_back, max_news_per_source
+                    )
+                    if xueqiu_news:
+                        all_news.extend(xueqiu_news)
+                        stats.sources_used.append("xueqiu_mcp")
+                        self.logger.info(f"✅ 雪球MCP资讯获取成功: {len(xueqiu_news)}条")
+                except Exception as e:
+                    self.logger.error(f"❌ 雪球MCP资讯获取失败: {e}")
             
             # 1. Tushare新闻
             if "tushare" in data_sources:
@@ -179,6 +192,37 @@ class NewsDataSyncService:
             self.logger.error(f"❌ 同步股票新闻失败 {symbol}: {e}")
             stats.end_time = datetime.utcnow()
             return stats
+
+    async def _sync_xueqiu_mcp_news(
+        self,
+        symbol: str,
+        hours_back: int,
+        max_news: int
+    ) -> List[Dict[str, Any]]:
+        """通过本地 Chrome MCP 同步雪球资讯与用户讨论。"""
+        try:
+            import asyncio
+            from tradingagents.dataflows.xueqiu_mcp import (
+                fetch_xueqiu_stock_items,
+                normalize_storage_symbol,
+            )
+
+            storage_symbol = normalize_storage_symbol(symbol)
+            items = await asyncio.to_thread(fetch_xueqiu_stock_items, symbol, max_news)
+            if not items:
+                return []
+
+            cutoff = datetime.now() - timedelta(hours=hours_back)
+            standardized_news = []
+            for item in items:
+                if item.publish_time and item.publish_time < cutoff:
+                    continue
+                standardized_news.append(item.to_news_dict(storage_symbol))
+
+            return standardized_news[:max_news]
+        except Exception as e:
+            self.logger.error(f"❌ 雪球MCP新闻同步失败: {e}")
+            return []
     
     async def _sync_tushare_news(
         self,

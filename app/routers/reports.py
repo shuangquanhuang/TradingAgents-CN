@@ -85,6 +85,20 @@ def get_stock_name(stock_code: str) -> str:
         return stock_code
 
 
+def build_report_title(stock_symbol: str, stock_name: Optional[str] = None) -> str:
+    """Build a consistent report title with stock name and code."""
+    symbol = str(stock_symbol or "").strip()
+    name = str(stock_name or "").strip()
+
+    if name and symbol and name != symbol:
+        return f"{name}({symbol}) 分析报告"
+    if symbol:
+        return f"{symbol} 分析报告"
+    if name:
+        return f"{name} 分析报告"
+    return "股票分析报告"
+
+
 # 统一构建报告查询：支持 _id(ObjectId) / analysis_id / task_id 三种
 def _build_report_query(report_id: str) -> Dict[str, Any]:
     ors = [
@@ -199,7 +213,7 @@ async def get_reports_list(
             report = {
                 "id": str(doc["_id"]),
                 "analysis_id": doc.get("analysis_id", ""),
-                "title": f"{stock_name}({stock_code}) 分析报告",
+                "title": build_report_title(stock_code, stock_name),
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "market_type": market_type,  # 🔥 添加市场类型字段
@@ -281,6 +295,7 @@ async def get_report_detail(
             report = {
                 "id": tasks_doc.get("task_id", report_id),
                 "analysis_id": r.get("analysis_id", ""),
+                "title": build_report_title(stock_symbol, stock_name),
                 "stock_symbol": stock_symbol,
                 "stock_name": stock_name,  # 🔥 添加股票名称字段
                 "model_info": r.get("model_info", "Unknown"),  # 🔥 添加模型信息字段
@@ -319,6 +334,7 @@ async def get_report_detail(
             report = {
                 "id": str(doc["_id"]),
                 "analysis_id": doc.get("analysis_id", ""),
+                "title": build_report_title(stock_symbol, stock_name),
                 "stock_symbol": stock_symbol,
                 "stock_name": stock_name,  # 🔥 添加股票名称字段
                 "model_info": doc.get("model_info", "Unknown"),  # 🔥 添加模型信息字段
@@ -452,6 +468,8 @@ async def download_report(
             raise HTTPException(status_code=404, detail="报告不存在")
 
         stock_symbol = doc.get("stock_symbol", "unknown")
+        stock_name = doc.get("stock_name") or get_stock_name(stock_symbol)
+        report_title = build_report_title(stock_symbol, stock_name)
         analysis_date = doc.get("analysis_date", datetime.now().strftime("%Y-%m-%d"))
 
         if format == "json":
@@ -476,7 +494,7 @@ async def download_report(
             content_parts = []
 
             # 添加标题
-            content_parts.append(f"# {stock_symbol} 分析报告")
+            content_parts.append(f"# {report_title}")
             content_parts.append(f"**分析日期**: {analysis_date}")
             content_parts.append(f"**分析师**: {', '.join(doc.get('analysts', []))}")
             content_parts.append(f"**研究深度**: {doc.get('research_depth', 1)}")

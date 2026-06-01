@@ -1532,6 +1532,60 @@ class DataSourceManager:
             logger.error(f"❌ [数据来源: {self.current_source.value}异常] 获取股票信息失败: {e}", exc_info=True)
             return self._try_fallback_stock_info(symbol)
 
+    def _get_cached_stock_info(self, symbol: str) -> Dict:
+        """从 App MongoDB stock_basic_info 读取股票基本信息。"""
+        try:
+            from .cache.app_adapter import get_basics_from_cache, get_market_quote_dataframe
+
+            doc = get_basics_from_cache(symbol)
+            if not doc:
+                return {}
+
+            name = doc.get('name') or doc.get('stock_name') or ''
+            if not name:
+                return {}
+
+            board_labels = {'主板', '中小板', '创业板', '科创板'}
+            raw_industry = (doc.get('industry') or doc.get('industry_name') or '').strip()
+            sec_or_cat = (doc.get('sec') or doc.get('category') or '').strip()
+            market_val = (doc.get('market') or '').strip()
+            industry_val = raw_industry or sec_or_cat or '未知'
+            if raw_industry in board_labels:
+                if not market_val:
+                    market_val = raw_industry
+                if sec_or_cat:
+                    industry_val = sec_or_cat
+
+            result = {
+                'symbol': symbol,
+                'code': doc.get('code') or doc.get('symbol') or symbol,
+                'name': name,
+                'area': doc.get('area', '未知'),
+                'industry': industry_val or '未知',
+                'market': market_val or doc.get('market', '未知'),
+                'list_date': doc.get('list_date', '未知'),
+                'exchange': doc.get('exchange', '未知'),
+                'source': 'app_cache'
+            }
+
+            try:
+                df = get_market_quote_dataframe(symbol)
+                if df is not None and not df.empty:
+                    row = df.iloc[-1]
+                    result['current_price'] = row.get('close')
+                    result['change_pct'] = row.get('pct_chg')
+                    result['volume'] = row.get('volume')
+                    result['quote_date'] = row.get('date')
+                    result['quote_source'] = 'market_quotes'
+            except Exception as quote_error:
+                logger.debug(f"附加行情失败（忽略）：{quote_error}")
+
+            logger.info(f"✅ [数据来源: MongoDB-stock_basic_info] 成功获取: {symbol} -> {name}")
+            return result
+        except Exception as e:
+            logger.debug(f"从App缓存获取股票信息失败（忽略）: {symbol}, {e}")
+            return {}
+
     def get_stock_basic_info(self, stock_code: str = None) -> Optional[Dict[str, Any]]:
         """
         获取股票基础信息（兼容 stock_data_service 接口）
@@ -1597,6 +1651,11 @@ class DataSourceManager:
         """尝试使用备用数据源获取股票基本信息"""
         logger.error(f"🔄 {self.current_source.value}失败，尝试备用数据源获取股票信息...")
 
+        cached_result = self._get_cached_stock_info(symbol)
+        if cached_result.get('name') and cached_result['name'] != f'股票{symbol}':
+            logger.info(f"✅ [数据来源: 备用MongoDB缓存] 降级成功获取股票信息: {symbol}")
+            return cached_result
+
         # 获取所有可用数据源
         available_sources = self.available_sources.copy()
 
@@ -1645,6 +1704,41 @@ class DataSourceManager:
         # 所有数据源都失败，返回默认值
         logger.error(f"❌ 所有数据源都无法获取{symbol}的股票信息")
         return {'symbol': symbol, 'name': f'股票{symbol}', 'source': 'unknown'}
+
+    def _get_tushare_stock_info(self, symbol: str) -> Dict:
+        """使用Tushare获取股票基本信息。"""
+        try:
+            from .providers.china.tushare import get_tushare_provider
+
+            provider = get_tushare_provider()
+            if not provider or not provider.is_available():
+                logger.warning(f"⚠️ [股票信息] Tushare不可用: {symbol}")
+                return {}
+
+            ts_code = provider._normalize_ts_code(symbol)
+            df = provider.api.stock_basic(
+                ts_code=ts_code,
+                fields='ts_code,symbol,name,area,industry,market,exchange,list_date,is_hs,act_name,act_ent_type'
+            )
+            if df is None or df.empty:
+                logger.warning(f"⚠️ [股票信息] Tushare未返回数据: {symbol}")
+                return {}
+
+            info = provider.standardize_basic_info(df.iloc[0].to_dict())
+            return {
+                'symbol': info.get('symbol') or symbol,
+                'code': info.get('code') or symbol,
+                'name': info.get('name') or f'股票{symbol}',
+                'area': info.get('area', '未知'),
+                'industry': info.get('industry', '未知'),
+                'market': info.get('market', '未知'),
+                'list_date': info.get('list_date', '未知'),
+                'exchange': (info.get('market_info') or {}).get('exchange', info.get('exchange', '未知')),
+                'source': 'tushare'
+            }
+        except Exception as e:
+            logger.error(f"❌ [股票信息] Tushare获取失败: {symbol}, 错误: {e}")
+            return {}
 
     def _get_akshare_stock_info(self, symbol: str) -> Dict:
         """使用AKShare获取股票基本信息

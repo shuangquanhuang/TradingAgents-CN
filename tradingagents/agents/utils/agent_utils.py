@@ -1322,29 +1322,20 @@ class Toolkit:
                 logger.info(f"🇨🇳🇭🇰 [统一情绪工具] 处理中文市场情绪...")
 
                 try:
-                    # 可以集成微博、雪球、东方财富等中文社交媒体情绪
-                    # 目前使用基础的情绪分析
-                    sentiment_summary = f"""
-## 中文市场情绪分析
+                    from tradingagents.dataflows.xueqiu_mcp import (
+                        fetch_xueqiu_stock_items,
+                        format_items_for_sentiment,
+                    )
 
-**股票**: {ticker} ({market_info['market_name']})
-**分析日期**: {curr_date}
-
-### 市场情绪概况
-- 由于中文社交媒体情绪数据源暂未完全集成，当前提供基础分析
-- 建议关注雪球、东方财富、同花顺等平台的讨论热度
-- 港股市场还需关注香港本地财经媒体情绪
-
-### 情绪指标
-- 整体情绪: 中性
-- 讨论热度: 待分析
-- 投资者信心: 待评估
-
-*注：完整的中文社交媒体情绪分析功能正在开发中*
-"""
-                    result_data.append(sentiment_summary)
+                    xueqiu_items = fetch_xueqiu_stock_items(ticker, limit=20)
+                    sentiment_summary = format_items_for_sentiment(xueqiu_items, ticker)
+                    if sentiment_summary:
+                        result_data.append(f"## 雪球用户情绪（MCP实时获取）\n{sentiment_summary}")
+                    else:
+                        result_data.append("## 雪球用户情绪\n未获取到有效讨论样本")
                 except Exception as e:
-                    result_data.append(f"## 中文市场情绪\n获取失败: {e}")
+                    logger.warning(f"⚠️ [统一情绪工具] MCP雪球情绪获取失败: {e}")
+                    result_data.append(f"## 中文市场情绪\n雪球MCP数据获取失败: {e}")
 
             else:
                 # 美股：使用Reddit情绪分析

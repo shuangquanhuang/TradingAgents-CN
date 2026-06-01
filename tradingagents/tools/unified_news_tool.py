@@ -286,7 +286,24 @@ class UnifiedNewsAnalyzer:
         # 获取当前日期
         curr_date = datetime.now().strftime("%Y-%m-%d")
 
-        # 优先级0: 从数据库获取新闻（最高优先级）
+        # 优先级0: 通过本地 Chrome MCP 从雪球获取真实资讯/讨论
+        try:
+            from tradingagents.dataflows.xueqiu_mcp import (
+                fetch_xueqiu_stock_items,
+                format_items_for_news,
+            )
+
+            logger.info(f"[统一新闻工具] 🧭 优先通过MCP获取雪球资讯: {stock_code}")
+            xueqiu_items = fetch_xueqiu_stock_items(stock_code, limit=max_news)
+            xueqiu_news = format_items_for_news(xueqiu_items, stock_code)
+            if xueqiu_news and len(xueqiu_news.strip()) > 100:
+                logger.info(f"[统一新闻工具] ✅ MCP雪球资讯获取成功: {len(xueqiu_items)} 条")
+                return self._format_news_result(xueqiu_news, "雪球MCP资讯", model_info)
+            logger.warning(f"[统一新闻工具] ⚠️ MCP雪球资讯为空: {stock_code}")
+        except Exception as e:
+            logger.warning(f"[统一新闻工具] ⚠️ MCP雪球资讯获取失败，继续使用其他数据源: {e}")
+
+        # 优先级1: 从数据库获取新闻
         try:
             logger.info(f"[统一新闻工具] 🔍 优先从数据库获取 {stock_code} 的新闻...")
             db_news = self._get_news_from_database(stock_code, max_news)

@@ -50,13 +50,13 @@
                   v-model="stockInput"
                   type="textarea"
                   :rows="8"
-                  placeholder="请输入股票代码，每行一个&#10;支持格式：&#10;000001&#10;000002.SZ&#10;600036.SH&#10;AAPL&#10;TSLA"
-                  @input="parseStockCodes"
+                  placeholder="请输入股票代码或股票名称，支持换行、空格、逗号、顿号等分隔&#10;示例：&#10;贵州茅台、宁德时代、品茗科技&#10;000001 AAPL"
+                  @input="parseStockCodes(false)"
                   class="stock-textarea"
                 />
                 <div class="input-actions">
-                  <el-button type="primary" @click="parseStockCodes" size="small">
-                    解析股票代码
+                  <el-button type="primary" @click="parseStockCodes(true)" :loading="resolvingStocks" size="small">
+                    解析股票名称/代码
                   </el-button>
                   <el-button @click="clearStocks" size="small">清空</el-button>
                 </div>
@@ -73,7 +73,7 @@
                     @close="removeStock(index)"
                     class="stock-tag"
                   >
-                    {{ code }}
+                    {{ resolvedStockLabels[code] || code }}
                   </el-tag>
                   <el-tag v-if="stockCodes.length > 20" type="info">
                     +{{ stockCodes.length - 20 }} 更多...
@@ -84,7 +84,7 @@
               <!-- 无效代码提示 -->
               <div v-if="invalidCodes.length > 0" class="invalid-codes">
                 <el-alert
-                  title="以下股票代码格式可能有误，请检查："
+                  title="以下股票名称或代码未能解析，请检查："
                   type="warning"
                   :closable="false"
                 >
@@ -265,6 +265,7 @@
           :class="{ invalid: invalidCodes.includes(code) }"
         >
           <span class="stock-code">{{ code }}</span>
+          <span v-if="resolvedStockLabels[code] && resolvedStockLabels[code] !== code" class="stock-name">{{ resolvedStockLabels[code].replace(`${code} · `, '') }}</span>
           <el-button
             type="text"
             size="small"
@@ -300,6 +301,7 @@ import { useAuthStore } from '@/stores/auth'
 import ModelConfig from '@/components/ModelConfig.vue'
 import { getMarketByStockCode } from '@/utils/market'
 import { validateStockCode } from '@/utils/stockValidator'
+import { searchStocks as searchMultiMarketStocks, type StockInfo } from '@/api/multiMarket'
 
 // 路由实例（必须在顶层调用）
 const router = useRouter()
@@ -310,6 +312,8 @@ const stockInput = ref('')
 const stockCodes = ref<string[]>([])  // 保留用于表单绑定
 const symbols = ref<string[]>([])     // 标准化后的代码列表
 const invalidCodes = ref<string[]>([])
+const resolvingStocks = ref(false)
+const resolvedStockLabels = reactive<Record<string, string>>({})
 
 // 模型设置
 const modelSettings = ref({
@@ -342,24 +346,105 @@ const normalizeCodeSmart = (raw: string): { symbol?: string; error?: string } =>
   return { error: v.message || '代码格式无效' }
 }
 
-const parseStockCodes = () => {
-  const codes = stockInput.value
-    .split('\n')
-    .map(code => code.trim())
-    .filter(code => code.length > 0)
-    .filter((code, index, arr) => arr.indexOf(code) === index) // 去重
+const parseInputItems = (): string[] => {
+  const seen = new Set<string>()
+  return stockInput.value
+    .split(/[\s,，、;；/／|｜。]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toUpperCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+const normalizeResolvedStockCode = (stock: StockInfo): string => {
+  const rawCode = String(stock.code || '').trim()
+  const market = String(stock.market || '').toUpperCase()
+
+  if (market === 'CN') {
+    return validateStockCode(rawCode, 'A股').normalizedCode || rawCode
+  }
+  if (market === 'HK') {
+    return validateStockCode(rawCode, '港股').normalizedCode || rawCode.padStart(5, '0')
+  }
+  if (market === 'US') {
+    return validateStockCode(rawCode, '美股').normalizedCode || rawCode.toUpperCase()
+  }
+
+  return normalizeCodeSmart(rawCode).symbol || rawCode
+}
+
+const resolveStockByName = async (keyword: string): Promise<{ symbol?: string; label?: string }> => {
+  const markets = ['CN', 'HK', 'US']
+  const results = await Promise.allSettled(
+    markets.map(market => searchMultiMarketStocks(market, keyword, 5))
+  )
+
+  const stocks: StockInfo[] = results.flatMap((result) => {
+    if (result.status !== 'fulfilled') return []
+    return result.value.data?.stocks || []
+  })
+
+  if (stocks.length === 0) return {}
+
+  const normalizedKeyword = keyword.trim().toUpperCase()
+  const best =
+    stocks.find(stock => String(stock.name || '').trim() === keyword.trim()) ||
+    stocks.find(stock => String(stock.code || '').trim().toUpperCase() === normalizedKeyword) ||
+    stocks[0]
+
+  const symbol = normalizeResolvedStockCode(best)
+  const label = best.name ? `${symbol} · ${best.name}` : symbol
+  return { symbol, label }
+}
+
+const parseStockCodes = async (resolveNames = false) => {
+  const items = parseInputItems()
 
   const normalized: string[] = []
   const invalid: string[] = []
-  for (const c of codes) {
-    const { symbol } = normalizeCodeSmart(c)
-    if (symbol) normalized.push(symbol)
-    else invalid.push(c)
-  }
+  const labels: Record<string, string> = {}
 
-  stockCodes.value = normalized
-  symbols.value = [...normalized]
-  invalidCodes.value = invalid
+  if (resolveNames) resolvingStocks.value = true
+
+  try {
+    for (const item of items) {
+      const { symbol } = normalizeCodeSmart(item)
+      if (symbol) {
+        normalized.push(symbol)
+        labels[symbol] = symbol
+        continue
+      }
+
+      if (!resolveNames) {
+        invalid.push(item)
+        continue
+      }
+
+      const resolved = await resolveStockByName(item)
+      if (resolved.symbol) {
+        normalized.push(resolved.symbol)
+        labels[resolved.symbol] = resolved.label || resolved.symbol
+      } else {
+        invalid.push(item)
+      }
+    }
+
+    const uniqueNormalized = normalized.filter((code, index, arr) => arr.indexOf(code) === index)
+    stockCodes.value = uniqueNormalized
+    symbols.value = [...uniqueNormalized]
+    invalidCodes.value = invalid
+
+    Object.keys(resolvedStockLabels).forEach(key => delete resolvedStockLabels[key])
+    uniqueNormalized.forEach(code => {
+      resolvedStockLabels[code] = labels[code] || code
+    })
+  } finally {
+    if (resolveNames) resolvingStocks.value = false
+  }
 }
 
 const clearStocks = () => {
@@ -367,6 +452,7 @@ const clearStocks = () => {
   stockCodes.value = []
   symbols.value = []
   invalidCodes.value = []
+  Object.keys(resolvedStockLabels).forEach(key => delete resolvedStockLabels[key])
 }
 
 // 初始化模型设置
@@ -438,7 +524,7 @@ onMounted(async () => {
     stockCodes.value = parts
     stockInput.value = parts.join('\n')
     // 触发解析以更新 symbols
-    parseStockCodes()
+    await parseStockCodes(true)
   }
 })
 
@@ -448,6 +534,7 @@ const removeStock = (index: number) => {
   
   // 更新输入框
   stockInput.value = stockCodes.value.join('\n')
+  delete resolvedStockLabels[removedCode]
   
   // 从无效列表中移除
   const invalidIndex = invalidCodes.value.indexOf(removedCode)
@@ -457,33 +544,30 @@ const removeStock = (index: number) => {
 }
 
 const validateStocks = async () => {
-  // 按当前市场重新规范化并验证
-  const invalid: string[] = []
-  const valid: string[] = []
-  for (const c of stockCodes.value) {
-    const { symbol } = normalizeCodeSmart(c)
-    if (symbol) valid.push(symbol)
-    else invalid.push(c)
-  }
-  stockCodes.value = valid
-  symbols.value = [...valid]
-  invalidCodes.value = invalid
+  await parseStockCodes(true)
 
-  if (invalid.length === 0) {
-    ElMessage.success('所有股票代码验证通过')
+  if (invalidCodes.value.length === 0) {
+    ElMessage.success('所有股票名称/代码解析通过')
   } else {
-    ElMessage.warning(`发现 ${invalid.length} 个无效股票代码`)
+    ElMessage.warning(`发现 ${invalidCodes.value.length} 个无法解析的股票名称或代码`)
   }
 }
 
 const submitBatchAnalysis = async () => {
+  await parseStockCodes(true)
+
   if (!batchForm.title) {
     ElMessage.warning('请输入批次标题')
     return
   }
 
   if (stockCodes.value.length === 0) {
-    ElMessage.warning('请输入股票代码')
+    ElMessage.warning('请输入股票代码或股票名称')
+    return
+  }
+
+  if (invalidCodes.value.length > 0) {
+    ElMessage.warning(`还有 ${invalidCodes.value.length} 个股票名称或代码未能解析，请检查后再提交`)
     return
   }
 

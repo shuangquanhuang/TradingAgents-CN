@@ -16,10 +16,26 @@
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
 
 logger = logging.getLogger("webapi")
+
+
+def _mongo_json_safe(value: Any) -> Any:
+    """Convert Mongo-specific values so FastAPI/Pydantic can serialize them."""
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            key: _mongo_json_safe(item)
+            for key, item in value.items()
+            if key != "_id"
+        }
+    if isinstance(value, list):
+        return [_mongo_json_safe(item) for item in value]
+    return value
 
 
 class UnifiedStockService:
@@ -186,7 +202,7 @@ class UnifiedStockService:
         }
 
         # 查询所有匹配的记录
-        cursor = collection.find(filter_query)
+        cursor = collection.find(filter_query, {"_id": 0})
         all_results = await cursor.to_list(length=None)
         
         if not all_results:
@@ -214,7 +230,7 @@ class UnifiedStockService:
                     pass
         
         # 返回前 limit 条
-        result_list = list(unique_results.values())[:limit]
+        result_list = [_mongo_json_safe(doc) for doc in list(unique_results.values())[:limit]]
         logger.info(f"🔍 搜索 {market} 市场: '{query}' -> {len(result_list)} 条结果（已去重）")
         return result_list
 
@@ -283,4 +299,3 @@ class UnifiedStockService:
                 "timezone": "America/New_York"
             }
         ]
-

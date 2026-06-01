@@ -410,11 +410,6 @@ const activeReportTab = ref('')
 // 股票代码（从路由参数获取）
 const code = computed(() => {
   const routeCode = String(route.params.code || '').toUpperCase()
-  if (!routeCode) {
-    ElMessage.error('股票代码不能为空')
-    router.push({ name: 'Dashboard' })
-    return ''
-  }
   return routeCode
 })
 const symbol = computed(() => code.value.split('.')[0])  // 提取6位代码
@@ -737,6 +732,8 @@ async function fetchQuote() {
 }
 
 async function fetchFundamentals() {
+  if (!code.value) return
+
   try {
     const res = await stocksApi.getFundamentals(code.value)
     const f: any = (res as any)?.data || {}
@@ -779,6 +776,8 @@ async function fetchSyncStatus() {
 
 let timer: any = null
 async function checkFavorite() {
+  if (!code.value) return
+
   try {
     const res: any = await favoritesApi.check(code.value)
     const d: any = (res as any)?.data || {}
@@ -789,6 +788,11 @@ async function checkFavorite() {
 }
 
 async function loadPageData() {
+  if (!code.value) {
+    console.warn('股票代码为空，跳过股票详情数据加载')
+    return
+  }
+
   await Promise.all([
     fetchQuote(),
     fetchFundamentals(),
@@ -816,6 +820,12 @@ function resetPageState() {
 }
 
 onMounted(async () => {
+  if (!code.value) {
+    ElMessage.error('股票代码不能为空')
+    router.replace({ name: 'Dashboard' })
+    return
+  }
+
   // 首次加载：打通后端（并行）
   await loadPageData()
   // 每30秒刷新一次报价
@@ -854,6 +864,8 @@ function periodLabelToParam(p: string): string {
 watch(period, () => { fetchKline() })
 
 async function fetchKline() {
+  if (!code.value) return
+
   try {
     const param = periodLabelToParam(period.value)
     const res = await stocksApi.getKline(code.value, param as any, 200, 'none')
@@ -942,6 +954,8 @@ function cleanTitle(s: any): string {
 }
 
 async function fetchNews() {
+  if (!code.value) return
+
   try {
     const res = await stocksApi.getNews(code.value, 30, 50, true)
     const d: any = (res as any)?.data || {}
@@ -1008,9 +1022,13 @@ const basics = reactive({
 
 // 操作
 function onAnalyze() {
+  if (!code.value) return
+
   router.push({ name: 'SingleAnalysis', query: { stock: code.value } })
 }
 async function onToggleFavorite() {
+  if (!code.value) return
+
   try {
     if (!isFav.value) {
       const payload = {
@@ -1034,11 +1052,15 @@ async function onToggleFavorite() {
 }
 
 function goPaperTrading() {
+  if (!code.value) return
+
   router.push({ name: 'PaperTradingHome', query: { code: code.value } })
 }
 
 // 获取最新的历史分析报告
 async function fetchLatestAnalysis() {
+  if (!symbol.value) return
+
   try {
     console.log('🔍 [fetchLatestAnalysis] 开始获取历史分析报告, symbol:', symbol.value)
 
