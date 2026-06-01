@@ -19,6 +19,25 @@ import toml
 _bootstrap_logger = logging.getLogger("tradingagents.logging_manager")
 
 
+def _ensure_unicode_stdio() -> None:
+    """避免 Windows GBK 控制台无法输出 emoji/中文日志。"""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+_ensure_unicode_stdio()
+
+
 class ColoredFormatter(logging.Formatter):
     """彩色日志格式化器"""
     

@@ -289,6 +289,8 @@ def connect_mongodb(use_docker: bool = True, config: dict = None) -> MongoClient
                    False=在宿主机运行（使用 localhost）
         config: 配置字典，包含端口等信息
     """
+    print(f"\n🔌 连接到 MongoDB...")
+    print(config)
     if config is None:
         config = {
             'mongodb_port': 27017,
@@ -304,6 +306,7 @@ def connect_mongodb(use_docker: bool = True, config: dict = None) -> MongoClient
     auth_source = config.get('mongodb_auth_source') or 'admin'
     mongo_uri = config.get('mongodb_connection_string')
     env_name = "Docker 容器内" if use_docker else "宿主机"
+    port = config['mongodb_port']
 
     if not mongo_uri:
         # 构建 MongoDB URI
@@ -323,6 +326,7 @@ def connect_mongodb(use_docker: bool = True, config: dict = None) -> MongoClient
     print(f"\n🔌 连接到 MongoDB ({env_name})...")
     print(f"   URI: {masked_uri}")
     print(f"   数据库: {database}")
+    print(f"   端口: {port}")
 
     try:
         client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
@@ -652,4 +656,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -7,6 +7,25 @@ import platform
 
 from app.core.logging_context import LoggingContextFilter, trace_id_var
 
+
+def _ensure_unicode_stdio() -> None:
+    """让 Windows 控制台日志在遇到 emoji/中文时不因 GBK 编码失败。"""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+_ensure_unicode_stdio()
+
 # 🔥 在 Windows 上使用 concurrent-log-handler 避免文件占用问题
 _IS_WINDOWS = platform.system() == "Windows"
 if _IS_WINDOWS:
