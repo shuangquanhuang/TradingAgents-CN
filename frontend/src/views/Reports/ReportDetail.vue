@@ -38,6 +38,15 @@
           
           <div class="action-section">
             <el-button
+              v-if="report.stock_symbol"
+              type="primary"
+              plain
+              @click="viewStockDetail"
+            >
+              <el-icon><TrendCharts /></el-icon>
+              查看详情
+            </el-button>
+            <el-button
               v-if="canApplyToTrading"
               type="success"
               @click="applyToTrading"
@@ -459,6 +468,15 @@ const canApplyToTrading = computed(() => {
   // 检查是否包含买入或卖出建议
   return rec.includes('买入') || rec.includes('卖出') || rec.toLowerCase().includes('buy') || rec.toLowerCase().includes('sell')
 })
+
+// 查看股票详情
+const viewStockDetail = () => {
+  if (!report.value?.stock_symbol) return
+  router.push({
+    name: 'StockDetail',
+    params: { code: report.value.stock_symbol }
+  })
+}
 
 // 解析投资建议
 const parseRecommendation = () => {

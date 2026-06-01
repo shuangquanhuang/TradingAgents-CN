@@ -636,15 +636,12 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
         result = await service.get_us_news(normalized_code, days=days, limit=limit)
         return ok(result)
     elif market == 'HK':
-        # 港股：暂时返回空数据（TODO: 实现港股新闻）
-        data = {
-            "code": normalized_code,
-            "days": days,
-            "limit": limit,
-            "source": "none",
-            "items": []
-        }
-        return ok(data)
+        # 港股：使用 ForeignStockService 的港股新闻源（AKShare/Finnhub）
+        service = ForeignStockService()
+        result = await service.get_hk_news(normalized_code, days=days, limit=limit)
+        if include_announcements:
+            result["include_announcements"] = include_announcements
+        return ok(result)
     else:
         # A股：直接调用同步服务的查询方法（包含智能回退逻辑）
         try:
@@ -723,6 +720,32 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
 
             logger.info(f"✅ 转换完成: {len(items)} 条新闻")
 
+            # 3. 数据库和同步服务都没有数据时，使用已有数据源适配器兜底
+            #    这里会按配置优先级尝试 Tushare / AKShare 等，并能返回公告。
+            if not items:
+                logger.info(f"⚠️ 数据库/同步服务均无新闻，尝试数据源适配器兜底: {normalized_code}")
+                try:
+                    import asyncio
+                    from app.services.data_sources.manager import DataSourceManager
+
+                    mgr = DataSourceManager()
+                    fallback_items, fallback_source = await asyncio.to_thread(
+                        mgr.get_news_with_fallback,
+                        normalized_code,
+                        days,
+                        limit,
+                        include_announcements
+                    )
+
+                    if fallback_items:
+                        items = fallback_items[:limit]
+                        data_source = fallback_source or "fallback"
+                        logger.info(f"✅ 数据源适配器兜底成功: source={data_source}, items={len(items)}")
+                    else:
+                        logger.warning(f"⚠️ 数据源适配器兜底也未返回新闻: {normalized_code}")
+                except Exception as e:
+                    logger.error(f"❌ 数据源适配器兜底失败: {e}", exc_info=True)
+
             data = {
                 "code": normalized_code,
                 "days": days,
@@ -747,4 +770,3 @@ async def get_news(code: str, days: int = 30, limit: int = 50, include_announcem
                 "items": []
             }
             return ok(data)
-

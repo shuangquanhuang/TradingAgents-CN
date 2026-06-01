@@ -48,6 +48,15 @@ export interface NewsSyncResponse {
   data_sources?: string[]
   hours_back: number
   max_news_per_source: number
+  sync_stats?: {
+    total_processed: number
+    successful_saves: number
+    failed_saves: number
+    duplicate_skipped: number
+    sources_used: string[]
+    duration_seconds: number
+    success_rate: number
+  }
 }
 
 /**
@@ -93,6 +102,22 @@ export const newsApi = {
       hours_back,
       max_news_per_source
     })
+  },
+
+  /**
+   * 同步单只股票新闻（同步执行）
+   * @param symbol 股票代码
+   * @param hours_back 回溯小时数
+   * @param max_news_per_source 每个数据源最大新闻数量
+   */
+  async syncStockNews(symbol: string, hours_back: number = 24 * 30, max_news_per_source: number = 50) {
+    return ApiClient.post<NewsSyncResponse>('/api/news-data/sync/single', null, {
+      params: {
+        symbol,
+        hours_back,
+        max_news_per_source
+      },
+      timeout: 120000
+    })
   }
 }
-

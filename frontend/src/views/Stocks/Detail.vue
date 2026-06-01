@@ -204,14 +204,26 @@
           <template #header>
             <div class="card-hd">
               <div>近期新闻与公告</div>
-              <el-select v-model="newsFilter" size="small" style="width: 160px">
-                <el-option label="全部" value="all" />
-                <el-option label="新闻" value="news" />
-                <el-option label="公告" value="announcement" />
-              </el-select>
+              <div class="news-actions">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="newsSyncing"
+                  @click="syncNews"
+                >
+                  <el-icon><Refresh /></el-icon>
+                  同步
+                </el-button>
+                <el-select v-model="newsFilter" size="small" style="width: 160px">
+                  <el-option label="全部" value="all" />
+                  <el-option label="新闻" value="news" />
+                  <el-option label="公告" value="announcement" />
+                </el-select>
+              </div>
             </div>
           </template>
-          <el-empty v-if="newsItems.length === 0" description="暂无新闻" />
+          <el-empty v-if="filteredNews.length === 0" :description="newsFilter === 'announcement' ? '暂无公告' : newsFilter === 'news' ? '暂无新闻' : '暂无新闻与公告'" />
           <div v-else class="news-list">
             <div v-for="(n, i) in filteredNews" :key="i" class="news-item">
               <div class="row">
@@ -363,6 +375,7 @@ import { TrendCharts, Star, Refresh, Link, Document, Clock, Reading, CreditCard,
 import { marked } from 'marked'
 import { stocksApi } from '@/api/stocks'
 import { analysisApi } from '@/api/analysis'
+import { newsApi } from '@/api/news'
 import { ApiClient } from '@/api/request'
 import { stockSyncApi } from '@/api/stockSync'
 import { clearAllCache } from '@/api/cache'
@@ -921,6 +934,7 @@ async function fetchKline() {
 const newsFilter = ref('all')
 const newsItems = ref<any[]>([])
 const newsSource = ref<string | undefined>(undefined)
+const newsSyncing = ref(false)
 
 function cleanTitle(s: any): string {
   const t = String(s || '')
@@ -943,6 +957,31 @@ async function fetchNews() {
     newsSource.value = d.source
   } catch (e) {
     console.error('获取新闻失败', e)
+  }
+}
+
+async function syncNews() {
+  if (!code.value || newsSyncing.value) return
+
+  try {
+    newsSyncing.value = true
+    const res = await newsApi.syncStockNews(code.value, 24 * 30, 50)
+    const stats = (res as any)?.data?.sync_stats
+    const saved = Number(stats?.successful_saves ?? 0)
+    const processed = Number(stats?.total_processed ?? 0)
+
+    if (processed > 0 || saved > 0) {
+      ElMessage.success(`新闻同步完成，处理 ${processed} 条，保存 ${saved} 条`)
+    } else {
+      ElMessage.info('同步完成，暂未获取到新的新闻或公告')
+    }
+
+    await fetchNews()
+  } catch (e: any) {
+    console.error('同步新闻失败', e)
+    ElMessage.error(e?.message || '同步新闻失败')
+  } finally {
+    newsSyncing.value = false
   }
 }
 
@@ -1313,6 +1352,7 @@ function exportReport() {
 
 .body { margin-top: 4px; }
 .card-hd { display: flex; align-items: center; justify-content: space-between; }
+.news-actions { display: flex; align-items: center; gap: 8px; }
 .k-chart { height: 420px; }
 .legend { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 
