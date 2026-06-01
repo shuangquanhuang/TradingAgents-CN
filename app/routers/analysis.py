@@ -36,6 +36,31 @@ class BatchAnalyzeRequest(BaseModel):
     title: str = Field(default="批量分析", description="批次标题")
     description: Optional[str] = Field(None, description="批次描述")
 
+
+def _normalize_analysis_parameters(raw: Any) -> AnalysisParameters:
+    """Build AnalysisParameters from legacy dict/model data."""
+    if isinstance(raw, AnalysisParameters):
+        return raw
+    if isinstance(raw, dict):
+        return AnalysisParameters(**raw)
+    return AnalysisParameters()
+
+
+async def _launch_single_analysis_task(
+    task_id: str,
+    user_id: str,
+    request: SingleAnalysisRequest,
+    log_prefix: str = "BackgroundTask",
+) -> None:
+    """Run one analysis task asynchronously with shared logging/error handling."""
+    try:
+        logger.info(f"🚀 [{log_prefix}] 开始执行分析任务: {task_id}")
+        service = get_simple_analysis_service()
+        await service.execute_analysis_background(task_id, user_id, request)
+        logger.info(f"✅ [{log_prefix}] 分析任务执行完成: {task_id}")
+    except Exception as e:
+        logger.error(f"❌ [{log_prefix}] 分析任务执行失败: {task_id}, 错误: {e}", exc_info=True)
+
 # 新版API端点
 @router.post("/single", response_model=Dict[str, Any])
 async def submit_single_analysis(
@@ -57,28 +82,10 @@ async def submit_single_analysis(
         task_id = result["task_id"]
         user_id = user["id"]
 
-        # 定义一个包装函数来运行异步任务
         async def run_analysis_task():
-            """包装函数：在后台运行分析任务"""
-            try:
-                logger.info(f"🚀 [BackgroundTask] 开始执行分析任务: {task_id}")
-                logger.info(f"📝 [BackgroundTask] task_id={task_id}, user_id={user_id}")
-                logger.info(f"📝 [BackgroundTask] request={request}")
-
-                # 重新获取服务实例，确保在正确的上下文中
-                logger.info(f"🔧 [BackgroundTask] 正在获取服务实例...")
-                service = get_simple_analysis_service()
-                logger.info(f"✅ [BackgroundTask] 服务实例获取成功: {id(service)}")
-
-                logger.info(f"🚀 [BackgroundTask] 准备调用 execute_analysis_background...")
-                await service.execute_analysis_background(
-                    task_id,
-                    user_id,
-                    request
-                )
-                logger.info(f"✅ [BackgroundTask] 分析任务完成: {task_id}")
-            except Exception as e:
-                logger.error(f"❌ [BackgroundTask] 分析任务失败: {task_id}, 错误: {e}", exc_info=True)
+            logger.info(f"📝 [BackgroundTask] task_id={task_id}, user_id={user_id}")
+            logger.info(f"📝 [BackgroundTask] request={request}")
+            await _launch_single_analysis_task(task_id, user_id, request)
 
         # 使用 BackgroundTasks 执行异步任务
         background_tasks.add_task(run_analysis_task)
@@ -1219,6 +1226,80 @@ async def mark_task_as_failed(
     except Exception as e:
         logger.error(f"❌ 标记任务失败: {e}")
         raise HTTPException(status_code=500, detail=f"标记任务失败: {str(e)}")
+
+
+@router.post("/tasks/{task_id}/retry", response_model=Dict[str, Any])
+async def retry_task(
+    task_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """重试失败任务：复制原任务参数并创建一个新任务。"""
+    try:
+        from app.core.database import get_mongo_db
+
+        db = get_mongo_db()
+        old_task = await db.analysis_tasks.find_one({"task_id": task_id})
+        if not old_task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        if str(old_task.get("status", "")).lower() not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=400, detail="只有失败或已取消的任务可以重试")
+
+        old_user_id = str(old_task.get("user_id", ""))
+        current_user_id = str(user["id"])
+        if user.get("username") != "admin" and old_user_id and old_user_id != current_user_id:
+            raise HTTPException(status_code=403, detail="无权重试该任务")
+
+        symbol = (
+            old_task.get("symbol")
+            or old_task.get("stock_code")
+            or old_task.get("stock_symbol")
+        )
+        if not symbol:
+            raise HTTPException(status_code=400, detail="原任务缺少股票代码，无法重试")
+
+        parameters = _normalize_analysis_parameters(old_task.get("parameters") or {})
+        request = SingleAnalysisRequest(
+            symbol=str(symbol),
+            stock_code=str(symbol),
+            parameters=parameters
+        )
+
+        service = get_simple_analysis_service()
+        create_res = await service.create_analysis_task(user["id"], request)
+        new_task_id = create_res.get("task_id")
+        if not new_task_id:
+            raise RuntimeError("创建重试任务失败：未返回task_id")
+
+        await db.analysis_tasks.update_one(
+            {"task_id": new_task_id},
+            {"$set": {
+                "retry_of": task_id,
+                "retry_count": int(old_task.get("retry_count", 0) or 0) + 1,
+                "parameters": parameters.model_dump()
+            }}
+        )
+
+        asyncio.create_task(
+            _launch_single_analysis_task(new_task_id, user["id"], request, "RetryTask")
+        )
+
+        logger.info(f"🔁 任务重试已启动: old={task_id}, new={new_task_id}, symbol={symbol}")
+        return {
+            "success": True,
+            "data": {
+                "task_id": new_task_id,
+                "retry_of": task_id,
+                "stock_code": str(symbol),
+                "status": "pending"
+            },
+            "message": "重试任务已创建并开始执行"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 重试任务失败: {task_id}, {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重试任务失败: {str(e)}")
 
 
 @router.delete("/tasks/{task_id}")

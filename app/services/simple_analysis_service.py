@@ -743,14 +743,17 @@ class SimpleAnalysisService:
 
             try:
                 db = get_mongo_db()
+                task_parameters = request.parameters.model_dump() if request.parameters else {}
                 result = await db.analysis_tasks.update_one(
                     {"task_id": task_id},
                     {"$setOnInsert": {
                         "task_id": task_id,
                         "user_id": user_id,
+                        "symbol": code,
                         "stock_code": code,
                         "stock_symbol": code,
                         "stock_name": name,
+                        "parameters": task_parameters,
                         "status": "pending",
                         "progress": 0,
                         "created_at": datetime.utcnow(),

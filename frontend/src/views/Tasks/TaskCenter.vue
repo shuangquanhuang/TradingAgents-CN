@@ -364,7 +364,41 @@ const openReport = (row:any): void => {
   void router.push({ name: 'ReportDetail', params: { id } })
 }
 
-const retryTask = (_row:any) => { ElMessage.info('重试功能待实现') }
+const retryTask = async (row:any) => {
+  const taskId = row?.task_id || row?.analysis_id || row?.id
+  if (!taskId) {
+    ElMessage.error('任务ID不存在')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要重试任务 "${row.stock_name || row.stock_code || taskId}" 吗？系统会创建一个新的分析任务。`,
+      '确认重试',
+      {
+        confirmButtonText: '重试',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    loading.value = true
+    const res = await analysisApi.retryTask(taskId)
+    const newTaskId = (res as any)?.data?.task_id || (res as any)?.data?.data?.task_id
+    ElMessage.success(newTaskId ? `重试任务已提交：${newTaskId}` : '重试任务已提交')
+
+    activeTab.value = 'running'
+    currentPage.value = 1
+    await loadList()
+    setupPolling()
+  } catch (e:any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e?.message || '重试任务失败')
+    }
+  } finally {
+    loading.value = false
+  }
+}
 
 // 显示错误详情
 const showErrorDetail = async (row: any) => {
@@ -534,4 +568,3 @@ const formatTime = (t:string) => t ? formatDateTime(t) : '-'
   .pagination-wrapper { display:flex; justify-content:center; margin-top: 16px; }
 }
 </style>
-

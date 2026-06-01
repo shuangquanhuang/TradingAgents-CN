@@ -210,6 +210,11 @@ export const analysisApi = {
     return request.post(`/api/analysis/tasks/${taskId}/mark-failed`, {})
   },
 
+  // 重试失败任务
+  retryTask(taskId: string): Promise<ApiResponse<{ task_id: string; retry_of: string; stock_code: string; status: string }>> {
+    return request.post(`/api/analysis/tasks/${taskId}/retry`, {})
+  },
+
   // 删除任务
   deleteTask(taskId: string): Promise<{ success: boolean; message: string }> {
     return request.delete(`/api/analysis/tasks/${taskId}`)
@@ -476,7 +481,6 @@ export const getStockPlaceholder = (market: string): string => {
   }
   return placeholders[market] ?? '输入股票代码'
 }
-
 
 
 
