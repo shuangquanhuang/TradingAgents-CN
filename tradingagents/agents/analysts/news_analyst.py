@@ -17,6 +17,54 @@ from tradingagents.agents.utils.instrument_utils import build_instrument_context
 logger = get_logger("analysts.news")
 
 
+def _is_tool_call_placeholder(text: str) -> bool:
+    """Detect LLM placeholder text that promises tool use but contains no analysis."""
+    content = (text or "").strip()
+    if not content:
+        return True
+
+    placeholder_phrases = [
+        "我将立即调用工具",
+        "我将调用工具",
+        "立即调用工具",
+        "获取最新新闻数据，然后",
+        "基于真实数据进行分析",
+        "I will call",
+        "I will use the tool",
+    ]
+    has_placeholder = any(phrase in content for phrase in placeholder_phrases)
+    analysis_markers = ["影响分析", "新闻事件", "市场情绪", "投资建议", "风险", "##", "|"]
+    has_analysis = any(marker in content for marker in analysis_markers) and len(content) > 300
+    return has_placeholder and not has_analysis
+
+
+def _build_news_unavailable_report(ticker: str, company_name: str, tool_result: str = "") -> str:
+    """Return a real report when news retrieval produced no usable items."""
+    detail = (tool_result or "").strip()
+    if len(detail) > 600:
+        detail = detail[:600] + "..."
+
+    data_note = detail or "统一新闻工具未返回可用于分析的新闻条目。"
+    return f"""# {company_name}（{ticker}）新闻事件分析
+
+## 数据获取状态
+已调用统一新闻工具获取最新新闻数据，但当前未获取到足够的、可验证的相关新闻样本。
+
+## 分析结论
+由于缺少可用新闻样本，本次不对短期新闻冲击作正向或负向判断，也不基于新闻事件给出激进交易信号。当前新闻维度应视为“信息不足/中性”，后续决策应更多参考市场、基本面、技术面和风险管理模块。
+
+## 数据说明
+{data_note}
+
+| 维度 | 结论 |
+| --- | --- |
+| 新闻数据可用性 | 不足 |
+| 新闻情绪 | 中性/无法判定 |
+| 短期事件冲击 | 暂无可靠依据 |
+| 建议 | 等待新闻同步或补充数据源后复核 |
+"""
+
+
 def create_news_analyst(llm, toolkit):
     @log_analyst_module("news")
     def news_analyst_node(state):
@@ -203,13 +251,11 @@ def create_news_analyst(llm, toolkit):
         
         logger.info(f"[新闻分析师] 准备调用LLM进行新闻分析，模型: {model_info}")
         
-        # 🚨 DashScope/DeepSeek/Zhipu预处理：强制获取新闻数据
+        # 🚨 预处理：由代码强制获取新闻数据，LLM 只负责基于数据生成分析。
+        # 这样可以避免模型只回复“我将调用工具”但没有实际分析的问题。
         pre_fetched_news = None
-        if ('DashScope' in llm.__class__.__name__ 
-            or 'DeepSeek' in llm.__class__.__name__
-            or 'Zhipu' in llm.__class__.__name__
-            ):
-            logger.warning(f"[新闻分析师] 🚨 检测到{llm.__class__.__name__}模型，启动预处理强制新闻获取...")
+        if True:
+            logger.warning(f"[新闻分析师] 🚨 启动预处理强制新闻获取，模型: {llm.__class__.__name__}")
             try:
                 # 强制预先获取新闻数据
                 logger.info(f"[新闻分析师] 🔧 预处理：强制调用统一新闻工具...")
@@ -266,6 +312,9 @@ def create_news_analyst(llm, toolkit):
                     # 直接返回结果，跳过后续的工具调用检测
                     if hasattr(result, 'content') and result.content:
                         report = result.content
+                        if _is_tool_call_placeholder(report):
+                            logger.warning(f"[新闻分析师] ⚠️ 预处理模式LLM返回工具调用占位句，改用数据不足报告")
+                            report = _build_news_unavailable_report(ticker, company_name, pre_fetched_news)
                         logger.info(f"[新闻分析师] ✅ 预处理模式成功，报告长度: {len(report)} 字符")
                         logger.info(f"[新闻分析师] 📄 报告预览 (前300字符): {report[:300]}")
 
@@ -286,14 +335,33 @@ def create_news_analyst(llm, toolkit):
                         logger.warning(f"[新闻分析师] ⚠️ LLM返回结果为空，回退到标准模式")
 
                 else:
-                    logger.warning(f"[新闻分析师] ⚠️ 预处理获取新闻失败或内容过短（{len(pre_fetched_news) if pre_fetched_news else 0}字符），回退到标准模式")
+                    logger.warning(f"[新闻分析师] ⚠️ 预处理获取新闻失败或内容过短（{len(pre_fetched_news) if pre_fetched_news else 0}字符），返回数据不足报告")
                     if pre_fetched_news:
                         logger.warning(f"[新闻分析师] 📄 失败的新闻内容: {pre_fetched_news}")
+                    report = _build_news_unavailable_report(ticker, company_name, pre_fetched_news or "")
+                    from langchain_core.messages import AIMessage
+                    clean_message = AIMessage(content=report)
+                    end_time = datetime.now()
+                    time_taken = (end_time - start_time).total_seconds()
+                    logger.info(f"[新闻分析师] 新闻分析完成（新闻数据不足），总耗时: {time_taken:.2f}秒")
+                    return {
+                        "messages": [clean_message],
+                        "news_report": report,
+                        "news_tool_call_count": tool_call_count + 1
+                    }
 
             except Exception as e:
-                logger.error(f"[新闻分析师] ❌ 预处理失败: {e}，回退到标准模式")
+                logger.error(f"[新闻分析师] ❌ 预处理失败: {e}，返回数据不足报告")
                 import traceback
                 logger.error(f"[新闻分析师] 📋 异常堆栈: {traceback.format_exc()}")
+                report = _build_news_unavailable_report(ticker, company_name, str(e))
+                from langchain_core.messages import AIMessage
+                clean_message = AIMessage(content=report)
+                return {
+                    "messages": [clean_message],
+                    "news_report": report,
+                    "news_tool_call_count": tool_call_count + 1
+                }
         
         # 使用统一的Google工具调用处理器
         llm_start_time = datetime.now()
@@ -373,25 +441,46 @@ def create_news_analyst(llm, toolkit):
 
                         if hasattr(forced_result, 'content') and forced_result.content:
                             report = forced_result.content
+                            if _is_tool_call_placeholder(report):
+                                logger.warning(f"[新闻分析师] ⚠️ 强制补救LLM仍返回工具调用占位句，改用数据不足报告")
+                                report = _build_news_unavailable_report(ticker, company_name, forced_news)
                             logger.info(f"[新闻分析师] ✅ 强制补救成功，生成基于真实数据的报告，长度: {len(report)} 字符")
                             logger.info(f"[新闻分析师] 📄 报告预览 (前300字符): {report[:300]}")
                         else:
-                            logger.warning(f"[新闻分析师] ⚠️ 强制补救LLM返回为空，使用原始结果")
-                            report = result.content if hasattr(result, 'content') else ""
+                            logger.warning(f"[新闻分析师] ⚠️ 强制补救LLM返回为空，改用数据不足报告")
+                            report = _build_news_unavailable_report(ticker, company_name, forced_news)
                     else:
-                        logger.warning(f"[新闻分析师] ⚠️ 统一新闻工具获取失败或内容过短（{len(forced_news) if forced_news else 0}字符），使用原始结果")
+                        logger.warning(f"[新闻分析师] ⚠️ 统一新闻工具获取失败或内容过短（{len(forced_news) if forced_news else 0}字符），改用数据不足报告")
                         if forced_news:
                             logger.warning(f"[新闻分析师] 📄 失败的新闻内容: {forced_news}")
-                        report = result.content if hasattr(result, 'content') else ""
+                        report = _build_news_unavailable_report(ticker, company_name, forced_news or "")
 
                 except Exception as e:
                     logger.error(f"[新闻分析师] ❌ 强制补救过程失败: {e}")
                     import traceback
                     logger.error(f"[新闻分析师] 📋 异常堆栈: {traceback.format_exc()}")
-                    report = result.content if hasattr(result, 'content') else ""
+                    report = _build_news_unavailable_report(ticker, company_name, str(e))
             else:
                 # 有工具调用，直接使用结果
-                report = result.content
+                logger.warning(f"[新闻分析师] ⚠️ 非Google模型返回tool_calls，当前节点不依赖图ToolNode，改为显式强制取数分析")
+                try:
+                    forced_news = unified_news_tool(stock_code=ticker, max_news=10, model_info=model_info)
+                    if forced_news and len(forced_news.strip()) > 100:
+                        forced_prompt = f"""请基于以下已获取的最新新闻数据，对股票 {ticker}（{company_name}）进行详细的新闻分析：
+
+=== 最新新闻数据 ===
+{forced_news}
+
+请输出完整中文分析报告，不要再调用工具，不要说“我将调用工具”。"""
+                        forced_result = llm.invoke([{"role": "user", "content": forced_prompt}])
+                        report = forced_result.content if hasattr(forced_result, 'content') else ""
+                        if _is_tool_call_placeholder(report):
+                            report = _build_news_unavailable_report(ticker, company_name, forced_news)
+                    else:
+                        report = _build_news_unavailable_report(ticker, company_name, forced_news or "")
+                except Exception as e:
+                    logger.error(f"[新闻分析师] ❌ tool_calls显式补救失败: {e}", exc_info=True)
+                    report = _build_news_unavailable_report(ticker, company_name, str(e))
         
         total_time_taken = (datetime.now() - start_time).total_seconds()
         logger.info(f"[新闻分析师] 新闻分析完成，总耗时: {total_time_taken:.2f}秒")
@@ -399,6 +488,9 @@ def create_news_analyst(llm, toolkit):
         # 🔧 修复死循环问题：返回清洁的AIMessage，不包含tool_calls
         # 这确保工作流图能正确判断分析已完成，避免重复调用
         from langchain_core.messages import AIMessage
+        if _is_tool_call_placeholder(report):
+            logger.warning(f"[新闻分析师] ⚠️ 最终报告仍是工具调用占位句，替换为数据不足报告")
+            report = _build_news_unavailable_report(ticker, company_name)
         clean_message = AIMessage(content=report)
 
         logger.info(f"[新闻分析师] ✅ 返回清洁消息，报告长度: {len(report)} 字符")
